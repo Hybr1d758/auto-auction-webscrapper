@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Optional
 from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
 import csv
@@ -10,6 +11,7 @@ DETAIL_URL = "https://ca.iaai.com/vehicle-details/2753101"
 STATE_FILE = "state.json"
 OUTPUT_CSV = Path.cwd() / "auction_data.csv"
 URLS_FILE = Path.cwd() / "urls.txt"
+BROKEN_URLS_FILE = Path.cwd() / "broken_urls.txt"
 
 def load_urls(file_path: Path) -> list[str]:
     if not file_path.exists():
@@ -75,6 +77,15 @@ def find_labeled_value(soup: BeautifulSoup, labels: list[str]) -> str:
                     return clean_text(after[1])
     return ""
 
+def clean_amount(amount: Optional[str]) -> float:
+    if not amount:
+        return ""
+    amount = clean_text(amount)
+    #remove currency symbol and commas
+    amount = amount.replace("$", "").replace(",", "")
+    return float(amount)
+
+
 
 def parse_vehicle(html: str, url: str) -> dict:
     soup = BeautifulSoup(html, "html.parser")
@@ -113,7 +124,7 @@ def parse_vehicle(html: str, url: str) -> dict:
     money = re.compile(r"\$?\s?\d{1,3}(?:,\d{3})*(?:\.\d{2})?")
     acv_m = money.search(acv)
     if acv_m:
-        acv = acv_m.group(0)
+        acv = acv_m.group(0)  
     repair_m = money.search(repair)
     if repair_m:
         repair = repair_m.group(0)
@@ -125,8 +136,8 @@ def parse_vehicle(html: str, url: str) -> dict:
         "Year": clean_text(year),
         "Auction Date": clean_text(auction_date),
         "URL": url,
-        "ACV Cost": clean_text(acv),
-        "Repair Cost": clean_text(repair),
+        "ACV Cost": clean_amount(acv),
+        "Repair Cost": clean_amount(repair),
     }
 
 with sync_playwright() as p:
@@ -167,7 +178,11 @@ with sync_playwright() as p:
         pass
 
     rows: list[dict] = []
-    for url in URLS:
+    url_broken = []
+    for index, url in enumerate(URLS):
+        print(f"Processing {index + 1} of {len(URLS)}: {url}")
+        if index == 40:
+            break
         # Robust navigation: try domcontentloaded -> load -> manual wait
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
@@ -185,14 +200,36 @@ with sync_playwright() as p:
         except Exception:
             pass
         page.wait_for_timeout(800)
-
+        # extract current url of the page
+        current_url = page.url
+        print(f"Current URL: {current_url}")
+        print(f"original url: {url}")
+        if current_url != url:
+            print(f"URL mismatch: {current_url} != {url}")
+            url_broken.append(url)
+            continue
+       
         html = page.content()
         rows.append(parse_vehicle(html, url))
 
     # Save session for reuse
     context.storage_state(path=STATE_FILE)
     browser.close()
-
+    print(f"URLs broken: {url_broken}")
+    # Write broken URLs to text file
+    try:
+        if url_broken:
+            unique_broken = list(dict.fromkeys(url_broken))
+            with open(BROKEN_URLS_FILE, "w", encoding="utf-8") as f:
+                for broken in unique_broken:
+                    f.write(f"{broken}\n")
+            print(f"Broken URLs saved to {BROKEN_URLS_FILE}")
+        else:
+            # Create/clear the file to indicate no broken URLs this run
+            with open(BROKEN_URLS_FILE, "w", encoding="utf-8"):
+                pass
+    except Exception as e:
+        print(f"Failed to write broken URLs file: {e}")
     # Write CSV
     with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=HEADERS)
