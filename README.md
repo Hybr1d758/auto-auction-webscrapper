@@ -1,6 +1,4 @@
-# auto-auction-webscrapper
-
-## Auto Auction Web Scraper (Playwright + BeautifulSoup)
+# Auto Auction Web Scraper (Playwright + BeautifulSoup)
 
 Scrapes IAAI vehicle detail pages, extracts key fields, and writes `auction_data.csv`.
 
